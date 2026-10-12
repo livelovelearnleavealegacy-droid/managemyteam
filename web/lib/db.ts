@@ -60,7 +60,12 @@ export async function withUser<T>(
   const client = await appPool.connect();
   try {
     await client.query('BEGIN');
-    await client.query('SET LOCAL app.current_user_id = $1', [userId]);
+    // set_config(..., is_local = true) is the parameter-safe equivalent of
+    // SET LOCAL: Postgres rejects bound parameters in SET statements
+    // (syntax error at or near "$1", code 42601).
+    await client.query("SELECT set_config('app.current_user_id', $1, true)", [
+      userId,
+    ]);
     const q: QueryFn = (text, params) =>
       client.query(text, params) as Promise<QueryResult<any>> as Promise<{
         rows: any[];
