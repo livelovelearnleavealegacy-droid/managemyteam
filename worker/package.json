@@ -1,0 +1,1 @@
+{"dependencies":{"pg":"8.23.1"},"description":"Background job worker for managemyteam.io: shift-digest sweep, weekly report emails, trial-expiry notices.","engines":{"node":">=20"},"name":"managemyteam-worker","private":true,"scripts":{"digest":"node digest-runner.mjs","reports":"node report-runner.mjs","start":"node index.mjs","trial":"node trial-runner.mjs"},"type":"module"}
