@@ -1,22 +1,20 @@
-import NextAuth, { type DefaultSession } from 'next-auth';
+import NextAuth from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import bcrypt from 'bcryptjs';
 import { ownerPool } from '@/lib/db';
+import { authConfig } from '@/auth.config';
 
-declare module 'next-auth' {
-  interface Session {
-    user: { id: string } & DefaultSession['user'];
-  }
-}
-
+/**
+ * Full Auth.js setup (Node runtime ONLY — never import this from
+ * middleware.ts; the Edge middleware uses auth.config.ts instead).
+ *
+ * The Credentials provider verifies email/password against public.users
+ * via the owner pool (bypasses RLS — the caller has no session yet).
+ * Everything else (secret, session strategy, callbacks, pages) comes
+ * from the shared edge-safe config in auth.config.ts.
+ */
 export const { handlers, auth, signIn, signOut } = NextAuth({
-  // Railway runs behind a proxy; trust the forwarded host headers.
-  trustHost: true,
-  secret: process.env.AUTH_SECRET,
-  session: { strategy: 'jwt' },
-  // Unauthenticated middleware hits land here instead of the default
-  // NextAuth sign-in page.
-  pages: { signIn: '/login' },
+  ...authConfig,
   providers: [
     Credentials({
       credentials: {
@@ -50,30 +48,4 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       },
     }),
   ],
-  callbacks: {
-    async jwt({ token, user }) {
-      if (user?.id) token.sub = user.id;
-      return token;
-    },
-    async session({ session, token }) {
-      if (typeof token.sub === 'string') session.user.id = token.sub;
-      return session;
-    },
-    // Runs in the Edge middleware. Pure by design — no DB access here.
-    // Mirrors the original middleware.ts redirect behavior:
-    //  - signed out  -> only /login and /signup are public, everything else
-    //    bounces to /login (via `false` + pages.signIn)
-    //  - signed in   -> /login, /signup, and / send you to /overview
-    authorized({ auth: session, request }) {
-      const { pathname } = request.nextUrl;
-      const isAuthPage = pathname === '/login' || pathname === '/signup';
-
-      if (!session?.user) return isAuthPage;
-
-      if (isAuthPage || pathname === '/') {
-        return Response.redirect(new URL('/overview', request.nextUrl));
-      }
-      return true;
-    },
-  },
 });
