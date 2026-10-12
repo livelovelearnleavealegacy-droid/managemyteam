@@ -13,12 +13,19 @@
 // role app_user (password from APP_DB_PASSWORD) so RLS applies.
 //
 // Steps:
-//   1. CREATE ROLE IF NOT EXISTS app_user LOGIN PASSWORD '<APP_DB_PASSWORD>'
+//   1. Apply db/migrations/*.sql in filename order, one transaction per
+//      file, SKIPPING files already recorded in public.schema_migrations.
+//      Applied files are recorded in the same transaction as their DDL, so
+//      container restarts are safe: the SQL files use plain CREATE TABLE /
+//      CREATE POLICY and are NOT re-runnable against an existing database.
+//      Legacy bootstrap: a database that was migrated before tracking
+//      existed (tables present, zero history rows) gets every current file
+//      recorded as applied without executing it.
+//   2. CREATE ROLE IF NOT EXISTS app_user LOGIN PASSWORD '<APP_DB_PASSWORD>'
 //      (password is refreshed on every run so it stays in sync with the env)
-//   2. Grants: CONNECT, USAGE on schemas public/app, full DML on all tables
+//   3. Grants: CONNECT, USAGE on schemas public/app, full DML on all tables
 //      in public, USAGE+SELECT on all sequences, EXECUTE on app functions,
 //      plus ALTER DEFAULT PRIVILEGES so future tables/sequences get the same.
-//   3. Apply db/migrations/*.sql in filename order, one transaction per file.
 //   4. Verify: every one of the 21 tables must exist with RLS enabled;
 //      exit non-zero listing offenders otherwise.
 // ============================================================================
@@ -127,12 +134,52 @@ async function applyMigrations(client) {
     console.error(`ERROR: no .sql files found in ${migrationsDir}`);
     process.exit(1);
   }
+
+  // Bookkeeping table: which migration files have already been applied.
+  // Created by the runner itself (not by a migration file) so it exists
+  // before the first file runs.
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS public.schema_migrations (
+      name text PRIMARY KEY,
+      applied_at timestamptz NOT NULL DEFAULT now()
+    );`);
+
+  const { rows } = await client.query('SELECT name FROM public.schema_migrations');
+  const applied = new Set(rows.map((r) => r.name));
+
+  // Legacy bootstrap: databases migrated before tracking existed have the
+  // tables but no history rows. Re-running the files would fail on existing
+  // objects, so record every current file as applied instead.
+  if (applied.size === 0) {
+    const { rows: probe } = await client.query(
+      `SELECT to_regclass('public.businesses') AS businesses`);
+    if (probe[0].businesses !== null) {
+      console.log(
+        'Existing database detected with no migration history; ' +
+        'recording all current migrations as applied without re-running them.');
+      for (const file of files) {
+        await client.query(
+          'INSERT INTO public.schema_migrations (name) VALUES ($1) ON CONFLICT (name) DO NOTHING',
+          [file]);
+        applied.add(file);
+      }
+    }
+  }
+
   for (const file of files) {
+    if (applied.has(file)) {
+      console.log(`Skipping ${file} (already applied).`);
+      continue;
+    }
     const sql = readFileSync(join(migrationsDir, file), 'utf8');
     console.log(`Applying ${file} ...`);
     await client.query('BEGIN');
     try {
       await client.query(sql);
+      // Record in the SAME transaction: a failed file is never marked.
+      await client.query(
+        'INSERT INTO public.schema_migrations (name) VALUES ($1)',
+        [file]);
       await client.query('COMMIT');
       console.log(`  ok`);
     } catch (err) {
