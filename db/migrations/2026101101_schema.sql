@@ -60,65 +60,6 @@ as $$
   select nullif(current_setting('app.current_user_id', true), '')::uuid
 $$;
 
--- The remaining helpers are SECURITY DEFINER so they bypass RLS (owned by the
--- migration role). Return NULL when the caller has no public.users row (not
--- onboarded yet); RLS policies treat NULL as "deny", except the onboarding
--- insert path which explicitly checks for NULL.
-create or replace function app.current_business_id()
-returns uuid
-language sql
-stable
-security definer
-set search_path = public, app
-as $$
-  select business_id from public.users where id = app.current_user_id()
-$$;
-
-create or replace function app.current_role()
-returns text
-language sql
-stable
-security definer
-set search_path = public, app
-as $$
-  select role from public.users where id = app.current_user_id()
-$$;
-
-create or replace function app.is_manager_or_above()
-returns boolean
-language sql
-stable
-security definer
-set search_path = public, app
-as $$
-  select (role in ('admin', 'manager')) from public.users where id = app.current_user_id()
-$$;
-
-create or replace function app.is_admin()
-returns boolean
-language sql
-stable
-security definer
-set search_path = public, app
-as $$
-  select (role = 'admin') from public.users where id = app.current_user_id()
-$$;
---
--- Founder check: true when a business has no users yet. SECURITY DEFINER so it
--- bypasses RLS (the onboarding caller can see no users rows by design).
--- Used by the users_insert_onboarding policy to bind self-onboarding to a
--- brand-new business only — an authenticated user with no users row cannot
--- attach themselves (as admin) to someone else's business.
-create or replace function app.business_has_no_users(b uuid)
-returns boolean
-language sql
-stable
-security definer
-set search_path = public, app
-as $$
-  select not exists (select 1 from public.users where business_id = b)
-$$;
-
 -- 1. businesses ----------------------------------------------------------------
 create table public.businesses (
   id                   uuid        primary key default gen_random_uuid(),
@@ -447,3 +388,67 @@ create index idx_chat_messages_business_created    on public.chat_messages (busi
 create index idx_task_completions_template_instance on public.task_completions (template_id, instance_key);
 -- Billing: count of active (non-terminated) users per business.
 create index idx_users_billing_count on public.users (business_id, terminated_at);
+
+
+-- Helper functions (table-referencing) ------------------------------------------------
+-- These MUST come after the table definitions above: PostgreSQL validates SQL
+-- function bodies at CREATE time, and these query public.users.
+
+-- The remaining helpers are SECURITY DEFINER so they bypass RLS (owned by the
+-- migration role). Return NULL when the caller has no public.users row (not
+-- onboarded yet); RLS policies treat NULL as "deny", except the onboarding
+-- insert path which explicitly checks for NULL.
+create or replace function app.current_business_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public, app
+as $$
+  select business_id from public.users where id = app.current_user_id()
+$$;
+
+create or replace function app.current_role()
+returns text
+language sql
+stable
+security definer
+set search_path = public, app
+as $$
+  select role from public.users where id = app.current_user_id()
+$$;
+
+create or replace function app.is_manager_or_above()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, app
+as $$
+  select (role in ('admin', 'manager')) from public.users where id = app.current_user_id()
+$$;
+
+create or replace function app.is_admin()
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, app
+as $$
+  select (role = 'admin') from public.users where id = app.current_user_id()
+$$;
+--
+-- Founder check: true when a business has no users yet. SECURITY DEFINER so it
+-- bypasses RLS (the onboarding caller can see no users rows by design).
+-- Used by the users_insert_onboarding policy to bind self-onboarding to a
+-- brand-new business only — an authenticated user with no users row cannot
+-- attach themselves (as admin) to someone else's business.
+create or replace function app.business_has_no_users(b uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public, app
+as $$
+  select not exists (select 1 from public.users where business_id = b)
+$$;
