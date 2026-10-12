@@ -68,6 +68,17 @@ COPY web/package.json web/package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=builder /app/web/.next ./.next
 COPY --from=builder /app/web/public ./public
+# One-off ops scripts (idempotent): migrations + demo seed run at container
+# boot, before the web server starts. Railway's internal Postgres hostname is
+# only reachable from inside Railway, so the migration runs here instead of
+# from a laptop. migrate.mjs reapplies db/migrations/*.sql transactionally and
+# verifies all 21 tables; seed-users.mjs skips demo accounts that already
+# exist. Both are safe to re-run on every boot. Requires DATABASE_OWNER_URL
+# and APP_DB_PASSWORD env vars on the service.
+COPY scripts ./scripts
+COPY db ./db
+RUN cd scripts && npm ci --omit=dev
 EXPOSE 3000
 # Shell form so Railway's PORT is honored ($PORT:-3000 => 3000 locally).
-CMD ["sh", "-c", "node_modules/.bin/next start -p ${PORT:-3000}"]
+# Migrate + seed first, then start Next.js.
+CMD ["sh", "-c", "node scripts/migrate.mjs && node scripts/seed-users.mjs && node_modules/.bin/next start -p ${PORT:-3000}"]
