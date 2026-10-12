@@ -170,8 +170,11 @@ async function main() {
   const client = new pg.Client({ connectionString: ownerUrl });
   await client.connect();
   try {
-    await ensureAppUser(client);
+    // Migrations FIRST: they create the app schema and tables. Grants come
+    // after so GRANT ... ON SCHEMA app / ON ALL TABLES IN SCHEMA public
+    // don't fail on a fresh database where those objects don't exist yet.
     await applyMigrations(client);
+    await ensureAppUser(client);
     await verifyRls(client);
     console.log('Migration complete.');
   } finally {
